@@ -111,9 +111,6 @@ def cmd_switch(cmd):
     if cmd[0] == "submit_job":
         job_description_path = cmd[1]
         submit_job(job_description_path)
-    elif cmd[0] == "get_status":
-        job_id = cmd[1]
-        get_status(job_id)
     elif cmd[0] == "kill_job":
         job_id= cmd[1]
         kill_job(job_id)

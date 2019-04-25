@@ -6,3 +6,4 @@ resource_limit:
   cpu: 3
   memory: 32
 restart: true
+restart_times: 5
