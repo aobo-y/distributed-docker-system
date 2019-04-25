@@ -34,29 +34,63 @@ def load_tickets():
 def insert_ticket(job_id):
     tickets = load_tickets()
     if job_id not in tickets:
-        ticket_file = open("./tickets.txt", 'a')
+        ticket_file = open("./tickets.txt", 'a+')
         ticket_file.write("%s\n" % job_id)
     ticket_file.close()
+
+def delete_ticket(job_id):
+    tickets = load_tickets()
+    if job_id in tickets:
+        open('./tickets.txt', 'w').close()
+        tickets.remove(job_id)
+        for ticket in tickets:
+            insert_ticket(ticket)
+        return True
+    else:
+        return False
+
+def kill_job(job_id):
+    global proxy
+    tickets = load_tickets()
+    if job_id in tickets:
+        killed_by_master = proxy.kill_job(job_id)
+        if killed_by_master:
+            delete_ticket(job_id)
+            print("job killed...")
+        else:
+            print("master unable to kill the job")
+    else:
+        print("job_id invalid")
 
 def get_status(job_id):
     global proxy
     try:
         tickets = load_tickets()
         if job_id in tickets:
-            print(proxy.get_status(job_id))
+            return (proxy.get_status(job_id))
         else:
             print("invalid job_id...")
+            return ""
     except xmlrpc.client.Fault as err:
         print("error message: %s" % err.faultString)
+        return ""
 
 def list_jobs():
     tickets = load_tickets()
-    print("id of ongoing jobs: ")
+    status = []
     for ticket in tickets:
-        print(ticket)
+        status.append(get_status(ticket))
+    for i in range(0, len(tickets)):
+        print("%s       %s" % (tickets[i], status[i]))
 
 def stream_output(job_id):
-    pass
+    tickets = load_tickets()
+    global proxy
+    if job_id in tickets:
+        proxy.output_request(job_id)
+
+    else:
+        print("job_id invalid")
 
 def submit_job(path):
     global proxy

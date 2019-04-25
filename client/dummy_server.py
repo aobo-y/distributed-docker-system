@@ -19,6 +19,9 @@ def get_status(job_id):
 	return jobs[job_id]['status']
 
 def kill_job(job_id):
+	return True
+
+def output_request(job_id):
 	pass
 
 server = SimpleXMLRPCServer(("localhost", 8000))
@@ -26,6 +29,8 @@ print("Listening on port 8000...")
 server.register_function(is_even, "is_even")
 server.register_function(submit_jobs, "submit_jobs")
 server.register_function(get_status, "get_status")
+server.register_function(kill_job, "kill_job")
+server.register_function(output_request, "output_request")
 server.serve_forever()
 
 
