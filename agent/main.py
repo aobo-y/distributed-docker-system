@@ -10,13 +10,12 @@ from docker.errors import APIError, ImageNotFound
 from arg_parser import get_parser
 
 # global variable
-job_executor = None
-CONTAINER_MAX_RESTART = 5
+JOB_EXECUTOR = None
+MAX_RETRY = 5
 
 class JobExecutor:
 
     def __init__(self, cpu, memory):
-        self.status = "idle"
         self.cpu = cpu
         self.memory = memory # gigabyte
         self.client = docker.from_env()
@@ -42,14 +41,17 @@ class JobExecutor:
         mem_limit_str = str(mem_limit)+'g'
         try:
             if job_dict['restart']:
-                restart_policy_dict = {"Name": "on-failure", "MaximumRetryCount": CONTAINER_MAX_RESTART}
+                # check restart times
+                assert job_dict['restart_times'] > 0 and type(job_dict['restart_times']) == type(1)
+                restart_policy_dict = {"Name": "on-failure", "MaximumRetryCount": min(MAX_RETRY, job_dict['restart_times'])}
                 job_container = self.client.containers.run(job_dict['image_url'], cpuset_cpus=usable_cpu_str, \
                 mem_limit=mem_limit_str, restart_policy=restart_policy_dict, detach=True)
             else:
                 job_container = self.client.containers.run(job_dict['image_url'], cpuset_cpus=usable_cpu_str, \
                 mem_limit=mem_limit_str, detach=True)
             self.jobs[job_dict['job_id']] = job_container
-        except ImageNotFound:
+        except ImageNotFound as err:
+            print(err)
             return False
         except APIError as err:
             print(err)
@@ -60,14 +62,29 @@ class JobExecutor:
         if job_id not in self.jobs:
             return "job not exist"
         job_container = self.jobs[job_id]
-        return job_container.status
+        container_status = job_container.status
+        # map docker container status to job status in our definition
+        # container status: created, restarting, running, removing, paused, exited, or dead
+        # job status: pending, deploying, running, end, fail
+        job_status = None
+        if container_status in ['paused']:
+            job_status = 'pending'
+        elif container_status in ['created', 'restarting']:
+            job_status = 'deploying'
+        elif container_status in ['running', 'removing']:
+            job_status = 'running'
+        elif container_status in ['exited']:
+            job_status = 'end'
+        else:
+            job_status = 'fail'
+        return job_status
 
     def heartbeat(self):
         cpu_percentage = psutil.cpu_percent(interval=True)
         memory_percentage = psutil.virtual_memory()[2]
         job_status_list = []
         for job_id, job_container in self.jobs:
-            job_status_list.append((job_id, job_container.status))
+            job_status_list.append((job_id, self.check_job(job_id)))
         pulse_data = {}
         pulse_data['cpu_percentage'] = cpu_percentage
         pulse_data['memory_percentage'] = memory_percentage
@@ -81,7 +98,8 @@ class JobExecutor:
         try:
             job_logs = job_container.logs()
             return job_logs
-        except APIError:
+        except APIError as err:
+            print(err)
             return ''
     
     def kill_job(self, job_id):
@@ -94,22 +112,22 @@ RPC Methods
 """
 def rpc_heartbeat():
     # todo
-    return job_executor.heartbeat()
+    return JOB_EXECUTOR.heartbeat()
 
 def rpc_submit_job(job_dict):
     # todo
-    return job_executor.submit(job_dict)
+    return JOB_EXECUTOR.submit(job_dict)
 
 def rpc_stream_output(job_id):
     # todo 
-    return job_executor.get_output(job_id)
+    return JOB_EXECUTOR.get_output(job_id)
 
 def rpc_kill_job(job_id):
-    job_executor.kill_job(job_id)
+    JOB_EXECUTOR.kill_job(job_id)
 
 def rpc_test(job_id):
     # used for server debugging
-    job_executor.check_job(job_id)
+    JOB_EXECUTOR.check_job(job_id)
 
 """
 Agent Methods
@@ -157,7 +175,7 @@ if __name__ == '__main__':
     cpu, memory = psutil.cpu_count(logical=False), psutil.virtual_memory().total / (1024**3)
     # psutil bug fix: first call to cpu_percent will return 0
     psutil.cpu_percent(interval=None)
-    job_executor = JobExecutor(cpu, memory)
+    JOB_EXECUTOR = JobExecutor(cpu, memory)
     addr, port = get_addr_port("loopback")
     rpc_server = xmlrpc.server.SimpleXMLRPCServer((addr, port), allow_none=True)
     print("agent rpc server listening on port", port)
