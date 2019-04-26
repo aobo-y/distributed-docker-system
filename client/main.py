@@ -1,26 +1,48 @@
 import xmlrpc.client
-from pathlib import Path
 import yaml
 import os
+import socket
+from tabulate import tabulate
 
 proxy = None
+
+class JobDictFormatError(Exception):
+    def __init__(self):
+        pass
 
 def run(input_master_url):
     global proxy
     proxy = xmlrpc.client.ServerProxy("http://" + master_url)
     try:
-        proxy.is_even(0)                                            # check if server is up
-        print("connection established...")
-        if not os.path.exists("./tickets.txt"):                     # store tickets
+        proxy.is_even(0)                     
+    except xmlrpc.client.ProtocolError as err:
+        print("xmlrpc.client.ProtocalError: %s" % err.errmsg)
+        return False
+    except xmlrpc.client.Fault as err:
+        print("xmlrpc.client.Fault: %s" % err.faultString)
+        return False
+    except ConnectionRefusedError as err:
+        print("ConnectionRefusedError: connection refused...")
+        return False
+    except socket.gaierror as err:
+        print("socket.gaierror: name or service not known...")
+        return False
+    else:
+        if not os.path.exists("./tickets.txt"):
             os.mknod("./tickets.txt")
         print("ticket file created...")
         return True
-    except xmlrpc.client.ProtocolError as err:
-        print("error message: %s" % err.errmsg)
-        return False
-    except xmlrpc.client.Fault as err:
-        print("error message: %s" % err.faultString)
-        return False
+
+def job_dict_valid(job_dict):
+    return ("img_url" in job_dict 
+            and "resource_requirement" in job_dict 
+            and "cpu" in job_dict["resource_requirement"]
+            and isinstance(job_dict["resource_requirement"]["cpu"], int)
+            and "resource_limit" in job_dict
+            and "cpu" in job_dict["resource_limit"]
+            and isinstance(job_dict["resource_limit"]["cpu"], int)
+            and "restart" in job_dict
+            and "restart_times" in job_dict)
 
 def load_tickets():
     tickets = []
@@ -33,9 +55,8 @@ def load_tickets():
 
 def insert_ticket(job_id):
     tickets = load_tickets()
-    if job_id not in tickets:
-        ticket_file = open("./tickets.txt", 'a+')
-        ticket_file.write("%s\n" % job_id)
+    ticket_file = open("./tickets.txt", 'a+')
+    ticket_file.write("%s\n" % job_id)
     ticket_file.close()
 
 def delete_ticket(job_id):
@@ -45,82 +66,109 @@ def delete_ticket(job_id):
         tickets.remove(job_id)
         for ticket in tickets:
             insert_ticket(ticket)
-        return True
-    else:
-        return False
 
 def kill_job(job_id):
-    global proxy
     tickets = load_tickets()
     if job_id in tickets:
-        killed_by_master = proxy.kill_job(job_id)
-        if killed_by_master:
-            delete_ticket(job_id)
-            print("job killed...")
+        try:
+            global proxy
+            killed_by_master = proxy.kill_job(job_id)
+        except xmlrpc.client.ProtocolError as err:
+            print("xmlrpc.client.ProtocalError: %s" % err.errmsg)
+        except xmlrpc.client.Fault as err:
+            print("xmlrpc.client.Fault: %s" % err.faultString)
         else:
-            print("master unable to kill the job")
+            if killed_by_master:
+                delete_ticket(job_id)
+                print("job killed...")
+            else:
+                print("master unable to kill the job")
     else:
         print("job_id invalid")
 
 def get_status(job_id):
-    global proxy
+    status = ""
     try:
-        tickets = load_tickets()
-        if job_id in tickets:
-            return (proxy.get_status(job_id))
-        else:
-            print("invalid job_id...")
-            return ""
+        global proxy
+        status = proxy.get_status(job_id)
+    except xmlrpc.client.ProtocolError as err:
+        print("xmlrpc.client.ProtocalError: %s" % err.errmsg)
     except xmlrpc.client.Fault as err:
-        print("error message: %s" % err.faultString)
-        return ""
+        print("xmlrpc.client.Fault: %s" % err.faultString)
+    finally:
+        return status
 
 def list_jobs():
     tickets = load_tickets()
-    status = []
+    table = []
     for ticket in tickets:
-        status.append(get_status(ticket))
-    for i in range(0, len(tickets)):
-        print("%s       %s" % (tickets[i], status[i]))
+        status = get_status(ticket)
+        table.append([ticket, status])
+    print("")
+    print(tabulate(table, headers=['Job ID', 'Status'], tablefmt='orgtbl'))
 
 def stream_output(job_id):
     tickets = load_tickets()
-    global proxy
     if job_id in tickets:
-        proxy.output_request(job_id)
-
+        global proxy
+        try:
+            output = proxy.output_request(job_id)
+        except xmlrpc.client.ProtocolError as err:
+            print("xmlrpc.client.ProtocalError: %s" % err.errmsg)
+        except xmlrpc.client.Fault as err:
+            print("xmlrpc.client.Fault: %s" % err.faultString)
+        else:
+            output_file = open("./job_" + job_id + "_output.txt", 'wb+')
+            output_file.write(output.data)
     else:
         print("job_id invalid")
 
-def submit_job(path):
-    global proxy
-    job_file = Path(path)
-    if job_file.is_file():
-        job_file = open(path)
+def submit_job(job_file_path):
+    try:
+        global proxy
+        job_file = open(job_file_path)
         job_dict = yaml.safe_load(job_file)
-        try:
-            job_id = proxy.submit_jobs(job_dict)
-            insert_ticket(job_id)
-            print("submission succeeded, job id: %s" % job_id)
-        except xmlrpc.client.Fault as err:
-            print("error message: %s" % err.faultString)
+        if not job_dict_valid(job_dict):
+            raise JobDictFormatError
+        job_id = proxy.submit_job(job_dict)
+    except FileNotFoundError as err:
+        print("No such file '%s'" % job_file_path)
+    except xmlrpc.client.ProtocolError as err:
+        print("xmlrpc.client.ProtocalError: %s" % err.errmsg)
+    except xmlrpc.client.Fault as err:
+        print("xmlrpc.cleint.Fault: %s" % err.faultString)
+    except JobDictFormatError as err:
+        print("job dict format error")
     else:
-        print("path invalid...")
+        print("submission succeeded. job id : %s" % job_id)
+        insert_ticket(job_id)
 
 def cmd_switch(cmd):
     if cmd[0] == "submit_job":
-        job_description_path = cmd[1]
-        submit_job(job_description_path)
-    elif cmd[0] == "kill_job":
-        job_id= cmd[1]
-        kill_job(job_id)
+        try:
+            job_file_path = cmd[1]
+        except IndexError:
+            print("Error: missing argument")
+        else:
+            submit_job(job_file_path)
     elif cmd[0] == "list_jobs":
         list_jobs()
     elif cmd[0] == "stream_output":
-        job_id = cmd[1]
-        stream_output(job_id)
+        try:
+            job_id = cmd[1]
+        except IndexError:
+            print("Error: missing argument")
+        else:
+            stream_output(job_id)
+    elif cmd[0] == "kill_job":
+        try:
+            job_id= cmd[1]
+        except IndexError:
+            print("Error: missing argument")
+        else:
+            kill_job(job_id)
     else:
-        print("command not recognized...")
+        print("%s : command not found..." % cmd[0])
 
 if __name__ == "__main__":
     try:
@@ -129,7 +177,8 @@ if __name__ == "__main__":
             master_url = input("master_url: ")
             if master_url == "" or master_url == '\n':
                 continue
-            connected = run(master_url)
+            else:
+                connected = run(master_url)
         while True:
             cmd = input(">: ")
             if cmd == "" or cmd == '\n':
