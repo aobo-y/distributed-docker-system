@@ -28,8 +28,8 @@ def run(input_master_url):
         print("socket.gaierror: name or service not known...")
         return False
     else:
-        if not os.path.exists("./tickets.txt"):
-            os.mknod("./tickets.txt")
+        if not os.path.exists("./tickets/tickets.txt"):
+            os.mknod("./tickets/tickets.txt")
         print("ticket file created...")
         return True
 
@@ -46,8 +46,8 @@ def job_dict_valid(job_dict):
 
 def load_tickets():
     tickets = []
-    if os.path.exists("./tickets.txt"):
-        ticket_file = open("./tickets.txt")
+    if os.path.exists("./tickets/tickets.txt"):
+        ticket_file = open("./tickets/tickets.txt")
         for l in ticket_file.readlines():
             tickets.append(str(l).rstrip('\n'))
         ticket_file.close()
@@ -55,14 +55,14 @@ def load_tickets():
 
 def insert_ticket(job_id):
     tickets = load_tickets()
-    ticket_file = open("./tickets.txt", 'a+')
+    ticket_file = open("./tickets/tickets.txt", 'a+')
     ticket_file.write("%s\n" % job_id)
     ticket_file.close()
 
 def delete_ticket(job_id):
     tickets = load_tickets()
     if job_id in tickets:
-        open('./tickets.txt', 'w').close()
+        open('./tickets/tickets.txt', 'w').close()
         tickets.remove(job_id)
         for ticket in tickets:
             insert_ticket(ticket)
@@ -118,8 +118,9 @@ def stream_output(job_id):
         except xmlrpc.client.Fault as err:
             print("xmlrpc.client.Fault: %s" % err.faultString)
         else:
-            output_file = open("./job_" + job_id + "_output.txt", 'wb+')
+            output_file = open("./job_output/job_" + job_id + "_output.txt", 'wb+')
             output_file.write(output.data)
+            print("output streamed to '%s'" % "./job_output/job_" + job_id + "_output.txt")
     else:
         print("job_id invalid")
 
