@@ -12,7 +12,7 @@ from arg_parser import get_parser
 # Agent Configuration
 MAX_RETRY = 5
 AGENT_IP = 'localhost'
-AGENT_PORT = 8000
+AGENT_PORT = 8001
 
 # Global Variables
 docker_client = docker.from_env()
@@ -26,7 +26,10 @@ psutil.cpu_percent(interval=None)
 # Internal Methods
 def check_job(job_id):
     job_container = agent_jobs[job_id]
+    job_container.reload()
     container_status = job_container.status
+    container_attrs = job_container.attrs
+    job_restart_count = container_attrs['RestartCount']
     # map docker container status to job status in our definition
     # container status: created, restarting, running, removing, paused, exited, or dead
     # job status: pending, deploying, running, end, fail
@@ -38,10 +41,13 @@ def check_job(job_id):
     elif container_status in ['running', 'removing']:
         job_status = 'running'
     elif container_status in ['exited']:
-        job_status = 'end'
+        if container_attrs['State']['ExitCode'] == 0:
+            job_status = 'end'
+        else:
+            job_status = 'fail'
     else:
         job_status = 'fail'
-    return job_status
+    return job_status, job_restart_count
 
 
 """
@@ -50,18 +56,23 @@ RPC Methods
 def rpc_heartbeat():
     cpu_percentage = psutil.cpu_percent(interval=True)
     memory_percentage = psutil.virtual_memory()[2]
-    job_status_list = []
-    for job_id, _ in agent_jobs:
-        job_status_list.append((job_id, check_job(job_id)))
+    job_attrs_list = []
+    for job_id in agent_jobs:
+        job_attrs = {}
+        job_attrs['job_id'] = job_id
+        job_attrs['status'], job_attrs['restart_count'] = check_job(job_id)
+        job_attrs_list.append(job_attrs)
     pulse_data = {}
-    pulse_data['cpu_percentage'] = cpu_percentage
-    pulse_data['memory_percentage'] = memory_percentage
-    pulse_data['job_status_list'] = job_status_list
+    pulse_data['cpu_usage'] = cpu_percentage
+    pulse_data['memory_usage'] = memory_percentage
+    pulse_data['job_attrs_list'] = job_attrs_list
     return pulse_data
 
 
 def rpc_submit_job(job_dict):
     # setup and run container
+    if job_dict['job_id'] in agent_jobs:
+        return True
     cpu_limit = min(agent_cpu, job_dict['resource_limit']['cpu'])
     cpus = [str(i) for i in range(agent_cpu)]
     random.shuffle(cpus)
@@ -90,12 +101,13 @@ def rpc_stream_output(job_id):
     if job_id not in agent_jobs:
         raise xmlrpc.client.Fault(1, 'job not exist')
     job_container = agent_jobs[job_id]
+    job_container.reload()
     try:
         job_logs = job_container.logs()
+        # type(job_logs) == <class 'bytes'>
         return job_logs
     except APIError as err:
-        print(err)
-        return ''
+        raise xmlrpc.client.Fault(2, str(err))
 
 
 def rpc_kill_job(job_id):
@@ -104,35 +116,13 @@ def rpc_kill_job(job_id):
     if agent_jobs[job_id].status != "exited":
         try:
             agent_jobs[job_id].kill()
-            return 'success'
         except docker.errors.APIError as err:
-            return 'kill job failed'
-    else:
-        return 'success'
+            raise xmlrpc.client.Fault(2, str(err))
+
 
 """
 Agent Methods
 """
-# find self ip and free port
-def get_addr_port(agent_status="free"):
-    if agent_status == "free":
-        # not inside nat or firewall
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        addr, port = s.getsockname()
-        s.close()
-        return addr, port
-    elif agent_status == "loopback":
-        # loopback for testing
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.bind(("", 0))
-        addr, port = s.getsockname()
-        s.close()
-        return addr, port
-    else:
-        return None, None
-
-
 def valid_url(input_url):
     url_regex = re.compile(
         r'^(?:http|ftp)s?://' # http:// or https://
