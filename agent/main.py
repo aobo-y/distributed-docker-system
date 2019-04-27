@@ -9,125 +9,106 @@ from threading import Thread
 from docker.errors import APIError, ImageNotFound
 from arg_parser import get_parser
 
-# global variable
-JOB_EXECUTOR = None
+# Agent Configuration
 MAX_RETRY = 5
+AGENT_IP = 'localhost'
+AGENT_PORT = 8000
 
-class JobExecutor:
+# Global Variables
+docker_client = docker.from_env()
+agent_cpu = psutil.cpu_count(logical=False)
+agent_memory = psutil.virtual_memory().total / (1024**3)
+agent_jobs = {}
 
-    def __init__(self, cpu, memory):
-        self.cpu = cpu
-        self.memory = memory # gigabyte
-        self.client = docker.from_env()
-        self.jobs = {}
+# psutil bug fix: first call to cpu_percent will return 0
+psutil.cpu_percent(interval=None)
 
-    # submit job
-    def submit(self, job_dict):
-        if job_dict['job_id'] in self.jobs:
-            # assume master submit same job twice
-            return True
-        # check if agent meet job requirement
-        if job_dict['resource_requirement']['cpu'] > self.cpu or job_dict['resource_requirement']['memory'] > self.memory:
-            # agent not qualified for job
-            return False
-        # setup and run container
-        cpu_limit = min(self.cpu, job_dict['resource_limit']['cpu'])
-        # set cpu limit
-        cpus = [str(i) for i in range(self.cpu)]
-        random.shuffle(cpus)
-        usable_cpu_str = ','.join(cpus[:cpu_limit])
-        # set mem limit
-        mem_limit = min(self.memory, job_dict['resource_limit']['memory'])
-        mem_limit_str = str(mem_limit)+'g'
-        try:
-            if job_dict['restart']:
-                # check restart times
-                assert job_dict['restart_times'] > 0 and type(job_dict['restart_times']) == type(1)
-                restart_policy_dict = {"Name": "on-failure", "MaximumRetryCount": min(MAX_RETRY, job_dict['restart_times'])}
-                job_container = self.client.containers.run(job_dict['image_url'], cpuset_cpus=usable_cpu_str, \
-                mem_limit=mem_limit_str, restart_policy=restart_policy_dict, detach=True)
-            else:
-                job_container = self.client.containers.run(job_dict['image_url'], cpuset_cpus=usable_cpu_str, \
-                mem_limit=mem_limit_str, detach=True)
-            self.jobs[job_dict['job_id']] = job_container
-        except ImageNotFound as err:
-            print(err)
-            return False
-        except APIError as err:
-            print(err)
-            return False
-        return True
+# Internal Methods
+def check_job(job_id):
+    job_container = agent_jobs[job_id]
+    container_status = job_container.status
+    # map docker container status to job status in our definition
+    # container status: created, restarting, running, removing, paused, exited, or dead
+    # job status: pending, deploying, running, end, fail
+    job_status = None
+    if container_status in ['paused']:
+        job_status = 'pending'
+    elif container_status in ['created', 'restarting']:
+        job_status = 'deploying'
+    elif container_status in ['running', 'removing']:
+        job_status = 'running'
+    elif container_status in ['exited']:
+        job_status = 'end'
+    else:
+        job_status = 'fail'
+    return job_status
 
-    def check_job(self, job_id):
-        if job_id not in self.jobs:
-            return "job not exist"
-        job_container = self.jobs[job_id]
-        container_status = job_container.status
-        # map docker container status to job status in our definition
-        # container status: created, restarting, running, removing, paused, exited, or dead
-        # job status: pending, deploying, running, end, fail
-        job_status = None
-        if container_status in ['paused']:
-            job_status = 'pending'
-        elif container_status in ['created', 'restarting']:
-            job_status = 'deploying'
-        elif container_status in ['running', 'removing']:
-            job_status = 'running'
-        elif container_status in ['exited']:
-            job_status = 'end'
-        else:
-            job_status = 'fail'
-        return job_status
-
-    def heartbeat(self):
-        cpu_percentage = psutil.cpu_percent(interval=True)
-        memory_percentage = psutil.virtual_memory()[2]
-        job_status_list = []
-        for job_id, job_container in self.jobs:
-            job_status_list.append((job_id, self.check_job(job_id)))
-        pulse_data = {}
-        pulse_data['cpu_percentage'] = cpu_percentage
-        pulse_data['memory_percentage'] = memory_percentage
-        pulse_data['job_status_list'] = job_status_list
-        return pulse_data
-
-    def get_output(self, job_id):
-        if job_id not in self.jobs:
-            return "job not exist"
-        job_container = self.jobs[job_id]
-        try:
-            job_logs = job_container.logs()
-            return job_logs
-        except APIError as err:
-            print(err)
-            return ''
-    
-    def kill_job(self, job_id):
-        if job_id in self.jobs:
-            if self.jobs[job_id].status != "exited":
-                self.jobs[job_id].kill()
 
 """
 RPC Methods
 """
 def rpc_heartbeat():
-    # todo
-    return JOB_EXECUTOR.heartbeat()
+    cpu_percentage = psutil.cpu_percent(interval=True)
+    memory_percentage = psutil.virtual_memory()[2]
+    job_status_list = []
+    for job_id, _ in agent_jobs:
+        job_status_list.append((job_id, check_job(job_id)))
+    pulse_data = {}
+    pulse_data['cpu_percentage'] = cpu_percentage
+    pulse_data['memory_percentage'] = memory_percentage
+    pulse_data['job_status_list'] = job_status_list
+    return pulse_data
+
 
 def rpc_submit_job(job_dict):
-    # todo
-    return JOB_EXECUTOR.submit(job_dict)
+    # setup and run container
+    cpu_limit = min(agent_cpu, job_dict['resource_limit']['cpu'])
+    cpus = [str(i) for i in range(agent_cpu)]
+    random.shuffle(cpus)
+    usable_cpu_str = ','.join(cpus[:cpu_limit])
+    mem_limit = min(agent_memory, job_dict['resource_limit']['memory'])
+    mem_limit_str = str(mem_limit)+'g'
+    try:
+        if job_dict['restart']:
+            # check restart times
+            assert job_dict['restart_times'] > 0 and type(job_dict['restart_times']) == type(1)
+            restart_policy_dict = {"Name": "on-failure", "MaximumRetryCount": min(MAX_RETRY, job_dict['restart_times'])}
+            job_container = docker_client.containers.run(job_dict['image_url'], cpuset_cpus=usable_cpu_str, \
+            mem_limit=mem_limit_str, restart_policy=restart_policy_dict, detach=True)
+        else:
+            job_container = docker_client.containers.run(job_dict['image_url'], cpuset_cpus=usable_cpu_str, \
+            mem_limit=mem_limit_str, detach=True)
+        agent_jobs[job_dict['job_id']] = job_container
+    except ImageNotFound as err:
+        raise xmlrpc.client.Fault(1, 'docker image not exist')
+    except APIError as err:
+        raise xmlrpc.client.Fault(2, 'docker server error')
+    return True
+
 
 def rpc_stream_output(job_id):
-    # todo 
-    return JOB_EXECUTOR.get_output(job_id)
+    if job_id not in agent_jobs:
+        raise xmlrpc.client.Fault(1, 'job not exist')
+    job_container = agent_jobs[job_id]
+    try:
+        job_logs = job_container.logs()
+        return job_logs
+    except APIError as err:
+        print(err)
+        return ''
+
 
 def rpc_kill_job(job_id):
-    JOB_EXECUTOR.kill_job(job_id)
-
-def rpc_test(job_id):
-    # used for server debugging
-    JOB_EXECUTOR.check_job(job_id)
+    if job_id not in agent_jobs:
+        raise xmlrpc.client.Fault(1, 'job not exist')
+    if agent_jobs[job_id].status != "exited":
+        try:
+            agent_jobs[job_id].kill()
+            return 'success'
+        except docker.errors.APIError as err:
+            return 'kill job failed'
+    else:
+        return 'success'
 
 """
 Agent Methods
@@ -151,6 +132,7 @@ def get_addr_port(agent_status="free"):
     else:
         return None, None
 
+
 def valid_url(input_url):
     url_regex = re.compile(
         r'^(?:http|ftp)s?://' # http:// or https://
@@ -161,48 +143,45 @@ def valid_url(input_url):
         r'(?:/?|[/?]\S+)$', re.IGNORECASE)
     return re.match(url_regex, input_url) is not None
 
-# start agent
-if __name__ == '__main__':
-    # parse args
-    parser = get_parser()
-    args = parser.parse_args()
-    # set & validate master url
-    master_url = args.master_url
-    if not valid_url(master_url):
-        print("invalid master url")
-        quit()
-    # set up rpc
-    cpu, memory = psutil.cpu_count(logical=False), psutil.virtual_memory().total / (1024**3)
-    # psutil bug fix: first call to cpu_percent will return 0
-    psutil.cpu_percent(interval=None)
-    JOB_EXECUTOR = JobExecutor(cpu, memory)
-    addr, port = get_addr_port("loopback")
-    rpc_server = xmlrpc.server.SimpleXMLRPCServer((addr, port), allow_none=True)
-    print("agent rpc server listening on port", port)
+
+def start_agent_rpc_server():
+    rpc_server = xmlrpc.server.SimpleXMLRPCServer((AGENT_IP, AGENT_PORT), allow_none=True)
+    print("agent rpc server listening on port", AGENT_PORT)
     # register rpc methods
     rpc_server.register_function(rpc_heartbeat, "heartbeat")
     rpc_server.register_function(rpc_submit_job, "submit_job")
     rpc_server.register_function(rpc_stream_output, "stream_output")
     rpc_server.register_function(rpc_kill_job, "kill_job")
-    # this one is for testing & debugging
-    rpc_server.register_function(rpc_test, "test")
     rpc_server_thread = Thread(target=lambda server : server.serve_forever(), args=(rpc_server,))
-    # run rpc server
     rpc_server_thread.setDaemon(True)
     rpc_server_thread.start()
+    return rpc_server_thread
+
+
+if __name__ == '__main__':
+    parser = get_parser()
+    args = parser.parse_args()
+    master_url = args.master_url
+    if not valid_url(master_url):
+        print("invalid master url")
+        quit()
+    rpc_server_thread = start_agent_rpc_server()
     # register node to master
     with xmlrpc.client.ServerProxy(master_url) as master:
         try:
             agent_dict = {}
-            agent_dict["agent_url"] = "http://"+addr+":"+str(port)
-            agent_dict["agent_cpu"] = cpu
-            agent_dict["memory"] = memory # gigabytes
+            agent_dict["url"] = "http://"+AGENT_IP+":"+str(AGENT_PORT)
+            agent_dict["cpu"] = agent_cpu
+            agent_dict["memory"] = agent_memory # gigabytes
             master.register_agent(agent_dict)
-        except xmlrpc.client.Error as err:
-            # todo: handle failure
-            print("Error ", err)
+        except xmlrpc.client.ProtocolError as err:
+            print("xmlrpc.client.ProtocalError: %s" % err.errmsg)
             quit()
-    while True:
-        # do nothing
-        pass
-    
+        except xmlrpc.client.Fault as err:
+            print("xmlrpc.client.Fault: %s" % err.faultString)
+            quit()
+        except ConnectionRefusedError as err:
+            print("ConnectionRefusedError: connection refused...")
+            quit()
+    # wait 
+    rpc_server_thread.join()
