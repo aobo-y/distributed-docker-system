@@ -5,10 +5,11 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Python: Current File",
+            "name": "Python: Master Main",
             "type": "python",
             "request": "launch",
-            "program": "${file}",
+            "program": "${workspaceFolder}/master/main.py",
+            "stopOnEntry": true,
             "console": "integratedTerminal"
         },
         {
@@ -17,7 +18,7 @@
             "request": "launch",
             "program": "${workspaceFolder}/agent/main.py",
             "args": [
-                "--master_url=http://localhost:8000"
+                "--master_url=http://localhost:8888"
             ],
             "stopOnEntry": true,
             "console": "integratedTerminal"

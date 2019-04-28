@@ -1,4 +1,5 @@
 import re
+import time
 import docker
 import socket
 import psutil
@@ -17,7 +18,7 @@ AGENT_PORT = 8001
 # Global Variables
 docker_client = docker.from_env()
 agent_cpu = psutil.cpu_count(logical=False)
-agent_memory = psutil.virtual_memory().total / (1024**3)
+agent_memory = int(psutil.virtual_memory().total / (1024**3))
 agent_jobs = {}
 
 # psutil bug fix: first call to cpu_percent will return 0
@@ -84,15 +85,16 @@ def rpc_submit_job(job_dict):
             # check restart times
             assert job_dict['restart_times'] > 0 and type(job_dict['restart_times']) == type(1)
             restart_policy_dict = {"Name": "on-failure", "MaximumRetryCount": min(MAX_RETRY, job_dict['restart_times'])}
-            job_container = docker_client.containers.run(job_dict['image_url'], cpuset_cpus=usable_cpu_str, \
+            job_container = docker_client.containers.run(job_dict['img_url'], cpuset_cpus=usable_cpu_str, \
             mem_limit=mem_limit_str, restart_policy=restart_policy_dict, detach=True)
         else:
-            job_container = docker_client.containers.run(job_dict['image_url'], cpuset_cpus=usable_cpu_str, \
+            job_container = docker_client.containers.run(job_dict['img_url'], cpuset_cpus=usable_cpu_str, \
             mem_limit=mem_limit_str, detach=True)
         agent_jobs[job_dict['job_id']] = job_container
     except ImageNotFound as err:
         raise xmlrpc.client.Fault(1, 'docker image not exist')
     except APIError as err:
+        print(err)
         raise xmlrpc.client.Fault(2, 'docker server error')
     return True
 
@@ -142,6 +144,7 @@ def start_agent_rpc_server():
     rpc_server.register_function(rpc_submit_job, "submit_job")
     rpc_server.register_function(rpc_stream_output, "stream_output")
     rpc_server.register_function(rpc_kill_job, "kill_job")
+    rpc_server.register_introspection_functions()
     rpc_server_thread = Thread(target=lambda server : server.serve_forever(), args=(rpc_server,))
     rpc_server_thread.setDaemon(True)
     rpc_server_thread.start()
@@ -174,4 +177,8 @@ if __name__ == '__main__':
             print("ConnectionRefusedError: connection refused...")
             quit()
     # wait 
-    rpc_server_thread.join()
+    while True:
+        try:
+            time.sleep(1)
+        except KeyboardInterrupt:
+            quit()

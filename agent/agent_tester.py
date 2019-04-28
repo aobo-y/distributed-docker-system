@@ -10,7 +10,7 @@ if __name__ == "__main__":
             # test simple docker job
             simple_job_dict = {}
             simple_job_dict['job_id'] = 'id0'
-            simple_job_dict['image_url'] = 'qizixi/barcode-generator:v0'
+            simple_job_dict['img_url'] = 'qizixi/barcode-generator:v0'
             simple_job_dict['resource_requirement'] = {'cpu':1, 'memory':1}
             simple_job_dict['resource_limit'] = {'cpu':1, 'memory':1}
             simple_job_dict['restart'] = True

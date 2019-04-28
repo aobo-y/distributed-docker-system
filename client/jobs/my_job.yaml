@@ -1,9 +1,9 @@
-img_url: "unknown"
+img_url: "qizixi/barcode-generator:v0"
 resource_requirement: 
-  cpu: 3
-  memory: 16
+  cpu: 1
+  memory: 1
 resource_limit:
-  cpu: 3
-  memory: 32
+  cpu: 1
+  memory: 1
 restart: true
 restart_times: 5

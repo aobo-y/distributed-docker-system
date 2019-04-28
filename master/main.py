@@ -3,6 +3,7 @@ import time
 import uuid
 import random
 import xmlrpc.client
+import xmlrpc.server
 from threading import Thread, Lock
 
 # Master Configurations
@@ -21,14 +22,14 @@ jobs_lock = Lock()
 # Internel Methods
 def get_id(id_type):
     if id_type == 'job':
-        id = uuid.uuid4()
+        id = str(uuid.uuid4())
         while id in jobs:
-            id = uuid.uuid4()
+            id = str(uuid.uuid4())
         return id
     elif id_type == 'agent':
-        id = uuid.uuid4()
+        id = str(uuid.uuid4())
         while id in agents:
-            id = uuid.uuid4()
+            id = str(uuid.uuid4())
         return id
     else:
         raise Exception('invalid id type')
@@ -64,7 +65,7 @@ def validate_proxy(agent_proxy):
         'kill_job'
     ]
     try:
-        agent_methods = agent_proxy.listMethods()
+        agent_methods = agent_proxy.system.listMethods()
         for method in agent_required_methods:
             if method not in agent_methods:
                 return False
@@ -122,17 +123,19 @@ def rpc_register_agent(agent_dict):
     if not validate_agent(agent_dict):
         raise xmlrpc.client.Fault(1, 'invalid agent dict')
     agent_id = get_id('agent')
+    new_agent = {}
+    new_agent['cpu'] = agent_dict['cpu']
+    new_agent['memory'] = agent_dict['memory']
+    agent_proxy = xmlrpc.client.ServerProxy(agent_dict['url']) 
+    if not validate_proxy(agent_proxy):
+        raise xmlrpc.client.Fault(2, 'invalid agent rpc server')
+    else:    
+        new_agent['proxy'] = agent_proxy
+    new_agent['cpu_usage'] = 0.01
+    new_agent['memory_usage'] = 0.01
     with agents_lock:
-        agents[agent_id] = {}
-        agents[agent_id]['cpu'] = agent_dict['cpu']
-        agents[agent_id]['memory'] = agent_dict['memory']
-        agent_proxy = xmlrpc.client.ServerProxy(agent_dict['url']) 
-        if not validate_proxy(agent_proxy):
-            raise xmlrpc.client.Fault(2, 'invalid agent rpc server')
-        else:    
-            agents[agent_id]['proxy'] = agent_proxy
-        agents[agent_id]['cpu_usage'] = 0.01
-        agents[agent_id]['memory_usage'] = 0.01
+        agents[agent_id] = new_agent
+    print('agent added')
     return True
 
 
@@ -183,6 +186,10 @@ def rpc_list_jobs():
         job_attrs['job_restart_count'] = jobs[job_id]['restart_count']
         results.append(job_attrs)
     return results
+
+
+def rpc_is_even(num):
+    return num % 2 == 0
 
 
 # Heartbeat Methods
@@ -277,4 +284,5 @@ if __name__ == '__main__':
     rpc_server.register_function(rpc_output_request, 'output_request')
     rpc_server.register_function(rpc_register_agent, 'register_agent')
     rpc_server.register_function(rpc_submit_job, 'submit_job')
+    rpc_server.register_function(rpc_is_even, 'is_even')
     rpc_server.serve_forever()
