@@ -107,6 +107,7 @@ def rpc_stream_output(job_id):
     try:
         job_logs = job_container.logs()
         # type(job_logs) == <class 'bytes'>
+        print(job_logs)
         return job_logs
     except APIError as err:
         raise xmlrpc.client.Fault(2, str(err))
@@ -118,9 +119,11 @@ def rpc_kill_job(job_id):
     if agent_jobs[job_id].status != "exited":
         try:
             agent_jobs[job_id].kill()
+            return True
         except docker.errors.APIError as err:
+            print(err)
             raise xmlrpc.client.Fault(2, str(err))
-
+    return True
 
 """
 Agent Methods

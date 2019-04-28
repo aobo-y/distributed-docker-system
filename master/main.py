@@ -81,7 +81,7 @@ def validate_proxy(agent_proxy):
 # core feature: resource matching
 def match_job_to_agent(job_dict):
     # find qualified agent with least workload to do the job
-    for agent_id in agents:
+    for agent_id in list(agents):
         candidates = []
         if agents[agent_id]['cpu'] >= job_dict['resource_requirement']['cpu'] and agents[agent_id]['memory'] >= job_dict['resource_requirement']['memory']:
             candidates.append(agent_id)
@@ -150,10 +150,10 @@ def rpc_kill_job(job_id):
     if job_id not in jobs:
         raise xmlrpc.client.Fault(1, 'job id not exist')
     if jobs[job_id]['status'] in ['end', 'fail']:
-        return  
+        return True
     try:
         agent_id = jobs[job_id]['agent_id']
-        agents[agent_id]['proxy'].kill_job(job_id)
+        return agents[agent_id]['proxy'].kill_job(job_id)
     except xmlrpc.client.ProtocolError as err:
         raise xmlrpc.client.Fault(2, str(err))
     except xmlrpc.client.Fault as err:
@@ -163,8 +163,6 @@ def rpc_kill_job(job_id):
 def rpc_output_request(job_id):
     if job_id not in jobs:
         raise xmlrpc.client.Fault(1, 'job id not exist')
-    if jobs[job_id]['status'] not in ['end', 'fail']:
-        raise xmlrpc.client.Fault(2, 'job not completed')
     try:
         agent_id = jobs[job_id]['agent_id']
         job_logs = agents[agent_id]['proxy'].stream_output(job_id)
@@ -179,7 +177,7 @@ def rpc_output_request(job_id):
 
 def rpc_list_jobs():
     results = []
-    for job_id in jobs:
+    for job_id in list(jobs):
         job_attrs = {}
         job_attrs['job_id'] = job_id
         job_attrs['job_status'] = jobs[job_id]['status']
@@ -196,9 +194,9 @@ def rpc_is_even(num):
 def destroy_agent(agent_id):
     with agents_lock:
         del agents[agent_id]
-    for job_id in jobs:
-        if jobs['agent_id'] == agent_id:
-            job_dict = jobs['job_dict']
+    for job_id in list(jobs):
+        if jobs[job_id]['agent_id'] == agent_id:
+            job_dict = jobs[job_id]['job_dict']
             with jobs_lock:
                 try:
                     new_agent_id = match_job_to_agent(job_dict)
@@ -209,6 +207,8 @@ def destroy_agent(agent_id):
                     else:
                         jobs[job_id]['status'] = 'fail'
                 except Exception as ignored:
+                    jobs[job_id]['status'] = 'fail'
+                except xmlrpc.client.Fault as ignored:
                     jobs[job_id]['status'] = 'fail'
             
 
@@ -234,13 +234,15 @@ def cpr_agent(agent_id):
             pass
         except xmlrpc.client.ProtocolError as ignored:
             pass
+        except ConnectionRefusedError as ignored:
+            pass
     destroy_agent(agent_id)
     with icu_lock:
         icu.remove(agent_id)
 
 
 def check_agent_heartbeat(agent_id):
-    if agent_id in icu:
+    if agent_id in list(icu):
         return
     agent_proxy = agents[agent_id]['proxy']
     try:
@@ -262,6 +264,12 @@ def check_agent_heartbeat(agent_id):
             icu.add(agent_id)
         cpr_thread = Thread(target=cpr_agent, args=(agent_id,))
         cpr_thread.start()
+    except ConnectionRefusedError as err:
+        with icu_lock:
+            icu.add(agent_id)
+        cpr_thread = Thread(target=cpr_agent, args=(agent_id,))
+        cpr_thread.start()
+    
     
 
 def heartbeat(heartbeat_rate):
