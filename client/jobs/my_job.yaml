@@ -1,0 +1,9 @@
+img_url: "unknown"
+resource_requirement: 
+  cpu: 3
+  memory: 16
+resource_limit:
+  cpu: 3
+  memory: 32
+restart: true
+restart_times: 5
