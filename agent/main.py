@@ -35,9 +35,7 @@ def check_job(job_id):
     # container status: created, restarting, running, removing, paused, exited, or dead
     # job status: pending, deploying, running, end, fail
     job_status = None
-    if container_status in ['paused']:
-        job_status = 'pending'
-    elif container_status in ['created', 'restarting']:
+    if container_status in ['created', 'restarting', 'paused']:
         job_status = 'deploying'
     elif container_status in ['running', 'removing']:
         job_status = 'running'
@@ -94,7 +92,6 @@ def rpc_submit_job(job_dict):
     except ImageNotFound as err:
         raise xmlrpc.client.Fault(1, 'docker image not exist')
     except APIError as err:
-        print(err)
         raise xmlrpc.client.Fault(2, 'docker server error')
     return True
 
@@ -107,7 +104,6 @@ def rpc_stream_output(job_id):
     try:
         job_logs = job_container.logs()
         # type(job_logs) == <class 'bytes'>
-        print(job_logs)
         return job_logs
     except APIError as err:
         raise xmlrpc.client.Fault(2, str(err))

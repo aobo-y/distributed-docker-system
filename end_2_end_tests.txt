@@ -22,7 +22,18 @@ TestCase2(job status fail when agent down and no replacement agent):
     result:
         success
 
+TestCase3(kill job)
+    environment:
+        localhost
+    steps:
+        start master, agent, client
+        submit job(loop_forever) from client to master
+        list job: status running
+        send kill job from client
+        list job: status end
+    result:
+        success
+
 Issues:
     job_id from previous run will show up in client list_jobs command
-    retrieve logs from container while it is running
-    restart times
+    error handling on client side
