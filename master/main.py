@@ -19,7 +19,7 @@ CPR_PERIODS = [10, 30, 60] # reconnection time periods
 
 # Global Variables
 # to maintain consistency, items shall not be deleted from agents and jobs
-agents = {} # agent_id -> {'proxy': xmlrpc.client.ServerProxy, 'cpu':int, 'cpu_usage': float, 'memory':float, 'memory_usage':float}
+agents = {} # agent_id -> {'proxy': xmlrpc.client.ServerProxy,'proxy_lock': Lock, 'cpu':int, 'cpu_usage': float, 'memory':float, 'memory_usage':float}
 agents_lock = Lock()
 jobs = {} # job_id -> {'status': str, 'agent_id': str, 'restart_count':int}
 jobs_lock = Lock()
@@ -61,7 +61,9 @@ def validate_agent(agent_dict):
     else:
         return False    
 
+
 def validate_proxy(agent_proxy):
+    # no need for locking because this agent_proxy is not in agent pool yet
     agent_required_methods = [
         'heartbeat',
         'submit_job',
@@ -98,7 +100,10 @@ def match_job_to_agent(job_dict):
         candidates.sort(key=lambda agent_id : agents[agent_id]['memory_usage'])
         for agent_id in candidates:
             try:
-                if agents[agent_id]['proxy'].submit_job(job_dict):
+                submission_result = False
+                with agents[agent_id]['proxy_lock']:
+                    submission_result = agents[agent_id]['proxy'].submit_job(job_dict)
+                if submission_result:
                     return agent_id
             except xmlrpc.client.Fault as err:
                 if err.faultCode == 1:
@@ -147,6 +152,7 @@ def rpc_register_agent(agent_dict):
         raise xmlrpc.client.Fault(2, 'invalid agent rpc server')
     else:    
         new_agent['proxy'] = agent_proxy
+    new_agent['proxy_lock'] = Lock()
     new_agent['cpu_usage'] = 0.01 # set to nonzero small value for resource matching algorithm
     new_agent['memory_usage'] = 0.01
     with agents_lock:
@@ -169,7 +175,8 @@ def rpc_kill_job(job_id):
         return True
     agent_id = jobs[job_id]['agent_id']
     try:
-        return agents[agent_id]['proxy'].kill_job(job_id)
+        with agents[agent_id]['proxy_lock']:
+            return agents[agent_id]['proxy'].kill_job(job_id)
     except xmlrpc.client.ProtocolError as err:
         raise xmlrpc.client.Fault(2, str(err))
     except xmlrpc.client.Fault as err:
@@ -183,7 +190,8 @@ def rpc_output_request(job_id):
         raise xmlrpc.client.Fault(1, 'job id not exist')
     agent_id = jobs[job_id]['agent_id']
     try:
-        job_logs = agents[agent_id]['proxy'].stream_output(job_id)
+        with agents[agent_id]['proxy_lock']:
+            job_logs = agents[agent_id]['proxy'].stream_output(job_id)
         # type(job_logs) == <class 'xmlrpc.client.Binary'>
         return job_logs
     except xmlrpc.client.Fault as err:
@@ -234,16 +242,16 @@ def destroy_agent(agent_id):
     with agents_lock:
         agents[agent_id]['status'] = 'dead'
     for job_id in list(jobs):
-        if jobs[job_id]['agent_id'] == agent_id:
+        if jobs[job_id]['agent_id'] == agent_id and jobs[job_id]['status'] not in ['fail', 'end']:
             redeploy_job(job_id)
             
 
 def cpr_agent(agent_id):
     for period in CPR_PERIODS:
         time.sleep(period)
-        agent_proxy = agents[agent_id]['proxy']
         try:
-            agent_pulse = agent_proxy.heartbeat()
+            with agents[agent_id]['proxy_lock']:
+                agent_pulse = agents[agent_id]['proxy'].heartbeat()
             # agent revived
             with agents_lock:
                 agents[agent_id]['cpu_usage'] = agent_pulse['cpu_usage']
@@ -265,9 +273,9 @@ def cpr_agent(agent_id):
 def check_agent_heartbeat(agent_id):
     if agents[agent_id]['status'] in ['icu', 'dead']:
         return
-    agent_proxy = agents[agent_id]['proxy']
     try:
-        agent_pulse = agent_proxy.heartbeat()
+        with agents[agent_id]['proxy_lock']:
+            agent_pulse = agents[agent_id]['proxy'].heartbeat()
         with agents_lock:
             agents[agent_id]['cpu_usage'] = agent_pulse['cpu_usage']
             agents[agent_id]['memory_usage'] = agent_pulse['memory_usage']

@@ -30,7 +30,7 @@ TestCase3(kill job)
         submit job(loop_forever) from client to master
         list job: status running
         send kill job from client
-        list job: status end
+        job killed and disapper from client
     result:
         success
 
