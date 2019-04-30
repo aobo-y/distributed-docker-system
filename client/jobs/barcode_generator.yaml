@@ -1,0 +1,9 @@
+img_url: "qizixi/barcode-generator:v0"
+resource_requirement: 
+  cpu: 1
+  memory: 1
+resource_limit:
+  cpu: 1
+  memory: 1
+restart: true
+restart_times: 5

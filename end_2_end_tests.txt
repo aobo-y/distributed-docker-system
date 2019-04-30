@@ -1,0 +1,39 @@
+TestCase1(basic workflow):
+    environment:
+        localhost
+    steps:
+        start master, agent, client
+        submit job(barcode_generator) from client to master
+        list jobs from client
+        stream output to file
+    result:
+        success
+
+TestCase2(job status fail when agent down and no replacement agent):
+    environment:
+        localhost
+    steps:
+        start master, agent, client
+        submit job(loop_forever) from client to master
+        list job: status running
+        force quit the only agent
+        wait
+        list job: status failed
+    result:
+        success
+
+TestCase3(kill job)
+    environment:
+        localhost
+    steps:
+        start master, agent, client
+        submit job(loop_forever) from client to master
+        list job: status running
+        send kill job from client
+        job killed and disapper from client
+    result:
+        success
+
+Issues:
+    job_id from previous run will show up in client list_jobs command
+    error handling on client side
