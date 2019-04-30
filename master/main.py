@@ -1,6 +1,7 @@
 import re
 import time
 import uuid
+import http
 import random
 import xmlrpc.client
 import xmlrpc.server
@@ -274,17 +275,22 @@ def check_agent_heartbeat(agent_id):
             for job_attrs in agent_pulse['job_attrs_list']:
                 jobs[job_attrs['job_id']]['status'] = job_attrs['status']
                 jobs[job_attrs['job_id']]['restart_count'] = job_attrs['restart_count']
-    except xmlrpc.client.Fault as err:
+    except xmlrpc.client.Fault:
         with agents_lock:
             agents[agent_id]['status'] = 'icu'
         cpr_thread = Thread(target=cpr_agent, args=(agent_id,))
         cpr_thread.start()
-    except xmlrpc.client.ProtocolError as err:
+    except xmlrpc.client.ProtocolError:
         with agents_lock:
             agents[agent_id]['status'] = 'icu'
         cpr_thread = Thread(target=cpr_agent, args=(agent_id,))
         cpr_thread.start()
-    except ConnectionRefusedError as err:
+    except ConnectionRefusedError:
+        with agents_lock:
+            agents[agent_id]['status'] = 'icu'
+        cpr_thread = Thread(target=cpr_agent, args=(agent_id,))
+        cpr_thread.start()
+    except http.client.CannotSendRequest:
         with agents_lock:
             agents[agent_id]['status'] = 'icu'
         cpr_thread = Thread(target=cpr_agent, args=(agent_id,))
