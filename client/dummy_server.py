@@ -17,7 +17,10 @@ def submit_job(input_job_dict):
 	return job_id
 
 def get_status(job_id):
-	return jobs[job_id]['status']
+    if job_id not in jobs:
+        raise xmlrpc.client.Fault(1, 'job id not exist')
+    else:
+        return jobs[job_id]['status']
 
 def kill_job(job_id):
 	return True
