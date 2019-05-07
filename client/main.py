@@ -10,6 +10,10 @@ class JobDictFormatError(Exception):
     def __init__(self):
         pass
 
+class JobIdNotExistError(Exception):
+    def __init__(self):
+        pass
+
 def run(input_master_url):
     global proxy
     proxy = xmlrpc.client.ServerProxy("http://" + master_url)
@@ -30,7 +34,11 @@ def run(input_master_url):
     else:
         if not os.path.exists("./tickets/tickets.txt"):
             os.mknod("./tickets/tickets.txt")
-        print("ticket file created...")
+            print("ticket file created...")
+        else:
+            tickets = load_tickets()
+            for ticket in tickets:
+                status = get_status(ticket)
         return True
 
 def job_dict_valid(job_dict):
@@ -95,6 +103,10 @@ def get_status(job_id):
         print("xmlrpc.client.ProtocalError: %s" % err.errmsg)
     except xmlrpc.client.Fault as err:
         print("xmlrpc.client.Fault: %s" % err.faultString)
+        print(err.faultCode)
+        if err.faultCode == 1:
+            delete_ticket(job_id)
+            print("invalid job id removed from ticket file")
     finally:
         return status
 
@@ -103,7 +115,8 @@ def list_jobs():
     table = []
     for ticket in tickets:
         status = get_status(ticket)
-        table.append([ticket, status])
+        if status != "":
+            table.append([ticket, status])
     print("")
     print(tabulate(table, headers=['Job ID', 'Status'], tablefmt='orgtbl'))
 
